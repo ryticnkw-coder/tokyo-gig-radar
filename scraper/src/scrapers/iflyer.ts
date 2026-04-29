@@ -1,19 +1,25 @@
 import { chromium } from 'playwright'
-import { parseJapaneseDate, parseTime, parsePrice } from '../lib/dateParser.js'
 import type { Scraper, ScrapedEvent } from './types.js'
 
 const BASE_URL = 'https://iflyer.tv'
-// ジャンル絞り込みはURLパラメータで対応可能
-const LIST_URLS = [
-  `${BASE_URL}/ja/guide/tokyo/`,
-  `${BASE_URL}/ja/guide/tokyo/?genre=club`,
-]
+const LIST_URL = `${BASE_URL}/listing/events/in_kanto_tokyo`
 
-// 海外アーティストの判定（is_touring）
 const FOREIGN_KEYWORDS = ['tour', 'japan tour', 'japan edition', 'live in tokyo', 'live in japan']
 function detectTouring(title: string): boolean {
   const lower = title.toLowerCase()
   return FOREIGN_KEYWORDS.some(k => lower.includes(k))
+}
+
+// "05.01 (Fri)" → "2026-05-01"
+function parseIflyerDate(raw: string): string | null {
+  const m = raw.match(/(\d{2})\.(\d{2})/)
+  if (!m) return null
+  const month = parseInt(m[1], 10)
+  const day = parseInt(m[2], 10)
+  const today = new Date()
+  let year = today.getFullYear()
+  if (month < today.getMonth() + 1) year++
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 export const iflyerScraper: Scraper = {
@@ -25,69 +31,58 @@ export const iflyerScraper: Scraper = {
     const eventsMap = new Map<string, ScrapedEvent>()
 
     try {
-      for (const url of LIST_URLS) {
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 })
+      await page.goto(LIST_URL, { waitUntil: 'networkidle', timeout: 30000 })
 
-        // iflyer のイベントカードセレクタ
-        const items = await page.$$('.event-card, .EventCard, [class*="event-list"] li, .guide-event-item')
+      const items = await page.$$('article')
 
-        for (const item of items) {
-          try {
-            const titleEl = await item.$('.event-name, .EventCard__title, h3, h2')
-            const title = (await titleEl?.textContent())?.trim()
-            if (!title) continue
+      for (const item of items) {
+        try {
+          const linkEl = await item.$('a[href*="/event/"]')
+          const href = await linkEl?.getAttribute('href')
+          if (!href) continue
+          const source_url = href.startsWith('http') ? href : `${BASE_URL}${href}`
 
-            const dateEl = await item.$('.event-date, .EventCard__date, .date, time')
-            const dateRaw = (await dateEl?.textContent())?.trim() ?? ''
-            const date = parseJapaneseDate(dateRaw)
-            if (!date) continue
+          if (eventsMap.has(source_url)) continue
 
-            if (date < new Date().toISOString().split('T')[0]) continue
+          // タイトル: <h1 myflyer-name="...">
+          const titleEl = await item.$('h1[myflyer-name]')
+          const title = (await titleEl?.textContent())?.trim()
+          if (!title) continue
 
-            const linkEl = await item.$('a')
-            const href = await linkEl?.getAttribute('href')
-            if (!href) continue
-            const source_url = href.startsWith('http') ? href : `${BASE_URL}${href}`
+          // 日付: <div class="nextevent">05.01 (Fri)</div>
+          const dateEl = await item.$('div.nextevent')
+          const dateRaw = (await dateEl?.textContent())?.trim() ?? ''
+          const date = parseIflyerDate(dateRaw)
+          if (!date) continue
 
-            // 重複排除
-            if (eventsMap.has(source_url)) continue
+          if (date < new Date().toISOString().split('T')[0]) continue
 
-            const venueEl = await item.$('.venue-name, .EventCard__venue, .venue')
-            const venue_name = (await venueEl?.textContent())?.trim() ?? '不明'
+          // 会場: <p class="moreinfo"><a>ENTER / Tokyo, Japan</a></p>
+          const venueEl = await item.$('p.moreinfo a')
+          const venueRaw = (await venueEl?.textContent())?.trim() ?? ''
+          const venue_name = venueRaw.split('/')[0]?.trim() || '不明'
 
-            const timeEl = await item.$('.time, .EventCard__time')
-            const timeRaw = (await timeEl?.textContent()) ?? ''
-            const openMatch = timeRaw.match(/open[:\s]*(\d{1,2}:\d{2})/i)
-            const startMatch = timeRaw.match(/start[:\s]*(\d{1,2}:\d{2})/i)
+          // 画像: <img class="lazy" src="...">
+          const imgEl = await item.$('img.lazy')
+          const imgSrc = await imgEl?.getAttribute('src')
+          const image_url = imgSrc && !imgSrc.includes('placeholder') ? imgSrc : undefined
 
-            const priceEl = await item.$('.price, .EventCard__price, .adm')
-            const priceRaw = (await priceEl?.textContent()) ?? ''
-            const priceNums = priceRaw.match(/[\d,]+/g)?.map(n => parseInt(n.replace(',', ''), 10)) ?? []
-
-            const imgEl = await item.$('img')
-            const imgSrc = await imgEl?.getAttribute('src')
-            const image_url = imgSrc && !imgSrc.includes('placeholder') ? imgSrc : undefined
-
-            eventsMap.set(source_url, {
-              title,
-              date,
-              open_time: openMatch ? parseTime(openMatch[1]) ?? undefined : undefined,
-              start_time: startMatch ? parseTime(startMatch[1]) ?? undefined : undefined,
-              price_min: priceNums[0],
-              price_max: priceNums[1] ?? priceNums[0],
-              source_url,
-              source_site: 'iflyer',
-              is_touring: detectTouring(title),
-              venue_name,
-              image_url,
-            })
-          } catch (e) {
-            // continue
-          }
+          eventsMap.set(source_url, {
+            title,
+            date,
+            open_time: undefined,
+            start_time: undefined,
+            price_min: undefined,
+            price_max: undefined,
+            source_url,
+            source_site: 'iflyer',
+            is_touring: detectTouring(title),
+            venue_name,
+            image_url,
+          })
+        } catch {
+          // 個別イベントのパースエラーは続行
         }
-
-        // レート制限: サイトへの負荷を避ける
-        await page.waitForTimeout(3000)
       }
     } finally {
       await browser.close()

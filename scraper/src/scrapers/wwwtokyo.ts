@@ -1,5 +1,5 @@
 import { chromium } from 'playwright'
-import { parseJapaneseDate, parseTime } from '../lib/dateParser.js'
+import { parseTime } from '../lib/dateParser.js'
 import type { Scraper, ScrapedEvent } from './types.js'
 
 const BASE_URL = 'https://www-shibuya.jp'
@@ -16,59 +16,59 @@ export const wwwTokyoScraper: Scraper = {
     try {
       await page.goto(SCHEDULE_URL, { waitUntil: 'networkidle', timeout: 30000 })
 
-      const items = await page.$$('.schedule-item, .event-item, article, .event')
+      // ページヘッダーから年月を取得: <li class="month"><div class="year">2026</div><a>04</a>
+      const year = await page.$eval('li.month .year', el => el.textContent?.trim() ?? '').catch(() => String(new Date().getFullYear()))
+      const month = await page.$eval('li.month a', el => el.textContent?.trim().padStart(2, '0') ?? '').catch(() => '')
+
+      const items = await page.$$('article.column')
 
       for (const item of items) {
         try {
-          const titleEl = await item.$('h2, h3, .event-name, .title')
+          const titleEl = await item.$('h3.title span')
           const title = (await titleEl?.textContent())?.trim()
           if (!title) continue
 
-          const dateEl = await item.$('.date, time, .event-date')
-          const dateRaw = (await dateEl?.textContent())?.trim() ?? ''
-          const date = parseJapaneseDate(dateRaw)
-          if (!date) continue
+          const linkEl = await item.$('a.pageLink')
+          const href = await linkEl?.getAttribute('href')
+          if (!href) continue
+          const source_url = href.startsWith('http') ? href : `${BASE_URL}${href}`
+
+          // 日付: p.day は日数のみ ("01") → ページの年月と結合
+          const dayEl = await item.$('p.day')
+          const day = (await dayEl?.textContent())?.trim()
+          if (!day || !month) continue
+          const date = `${year}-${month}-${day.padStart(2, '0')}`
 
           if (date < new Date().toISOString().split('T')[0]) continue
 
-          const linkEl = await item.$('a')
-          const href = await linkEl?.getAttribute('href')
-          const source_url = href
-            ? href.startsWith('http') ? href : `${BASE_URL}${href}`
-            : SCHEDULE_URL
+          // 時刻: "OPEN / START　17:45 / 18:30" → [17:45, 18:30]
+          const openStartEl = await item.$('p.openstart')
+          const openStartRaw = (await openStartEl?.textContent())?.trim() ?? ''
+          const times = openStartRaw.match(/\d{1,2}:\d{2}/g) ?? []
 
-          const timeEl = await item.$('.time, .open-start')
-          const timeRaw = (await timeEl?.textContent()) ?? ''
-          const openMatch = timeRaw.match(/open[:\s]*(\d{1,2}:\d{2})/i)
-          const startMatch = timeRaw.match(/start[:\s]*(\d{1,2}:\d{2})/i)
+          // 画像: span.image[data-bg] (lazy load のため src は空)
+          const imgSpan = await item.$('span.image')
+          const image_url = (await imgSpan?.getAttribute('data-bg')) ?? undefined
 
-          const priceEl = await item.$('.price, .adm, .charge')
-          const priceRaw = (await priceEl?.textContent()) ?? ''
-          const priceNums = priceRaw.match(/[\d,]+/g)?.map(n => parseInt(n.replace(',', ''), 10)) ?? []
-
-          const imgEl = await item.$('img')
-          const image_url = await imgEl?.getAttribute('src') ?? undefined
-
-          // 会場名（WWWとWWW Xで分岐）
-          const venueEl = await item.$('.venue, .place')
-          const venueRaw = (await venueEl?.textContent())?.trim()
-          const venue_name = venueRaw?.includes('X') ? 'WWW X' : 'WWW'
+          // 会場: data-place 属性 ("www_x" → "WWW X", それ以外 → "WWW")
+          const dataPlace = await item.getAttribute('data-place')
+          const venue_name = dataPlace === 'www_x' ? 'WWW X' : 'WWW'
 
           events.push({
             title,
             date,
-            open_time: openMatch ? parseTime(openMatch[1]) ?? undefined : undefined,
-            start_time: startMatch ? parseTime(startMatch[1]) ?? undefined : undefined,
-            price_min: priceNums[0],
-            price_max: priceNums[1] ?? priceNums[0],
+            open_time: times[0] ? parseTime(times[0]) ?? undefined : undefined,
+            start_time: times[1] ? parseTime(times[1]) ?? undefined : undefined,
+            price_min: undefined,
+            price_max: undefined,
             source_url,
             source_site: 'wwwtokyo',
             is_touring: false,
             venue_name,
             image_url,
           })
-        } catch (e) {
-          // continue
+        } catch {
+          // 個別イベントのパースエラーは続行
         }
       }
     } finally {
