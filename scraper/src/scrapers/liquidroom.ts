@@ -1,5 +1,5 @@
 import { chromium } from 'playwright'
-import { parseJapaneseDate, parseTime, parsePrice } from '../lib/dateParser.js'
+import { parseTime } from '../lib/dateParser.js'
 import type { Scraper, ScrapedEvent } from './types.js'
 
 const BASE_URL = 'https://www.liquidroom.net'
@@ -16,58 +16,68 @@ export const liquidroomScraper: Scraper = {
     try {
       await page.goto(SCHEDULE_URL, { waitUntil: 'networkidle', timeout: 30000 })
 
-      // イベントカードのセレクタ（実際のHTMLに合わせて調整が必要な場合あり）
-      const items = await page.$$('.schedule-list__item, .event-list__item, article.event')
+      const items = await page.$$('article')
 
       for (const item of items) {
         try {
-          const titleEl = await item.$('.event-title, .schedule-title, h2, h3')
+          const titleEl = await item.$('h2')
           const title = (await titleEl?.textContent())?.trim()
           if (!title) continue
 
-          const dateEl = await item.$('.event-date, .schedule-date, time, .date')
-          const dateRaw = (await dateEl?.textContent())?.trim() ?? ''
-          const date = parseJapaneseDate(dateRaw)
-          if (!date) continue
+          const linkEl = await item.$('a.s_link')
+          const href = await linkEl?.getAttribute('href')
+          if (!href) continue
+          const source_url = href.startsWith('http') ? href : `${BASE_URL}${href}`
 
-          // 過去イベントはスキップ
+          // 日付をURLから抽出: .../slug_20260401 → "2026-04-01"
+          const dateMatch = href.match(/(\d{4})(\d{2})(\d{2})$/)
+          if (!dateMatch) continue
+          const date = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`
+
           if (date < new Date().toISOString().split('T')[0]) continue
 
-          const linkEl = await item.$('a')
-          const href = await linkEl?.getAttribute('href')
-          const source_url = href
-            ? href.startsWith('http') ? href : `${BASE_URL}${href}`
-            : SCHEDULE_URL
+          let open_time: string | undefined
+          let start_time: string | undefined
+          let price_min: number | undefined
+          let price_max: number | undefined
 
-          // 時刻
-          const timeEl = await item.$('.event-time, .schedule-time, .time')
-          const timeRaw = (await timeEl?.textContent()) ?? ''
-          const openMatch = timeRaw.match(/open[:\s]*(\d{1,2}:\d{2})/i)
-          const startMatch = timeRaw.match(/start[:\s]*(\d{1,2}:\d{2})/i)
+          const dls = await item.$$('dl.clear')
+          for (const dl of dls) {
+            const dtEl = await dl.$('dt')
+            const ddEl = await dl.$('dd')
+            const dt = (await dtEl?.textContent())?.trim()
+            const dd = (await ddEl?.textContent())?.trim() ?? ''
 
-          // 価格
-          const priceEl = await item.$('.event-price, .price, .adm')
-          const priceRaw = (await priceEl?.textContent()) ?? ''
-          const priceNums = priceRaw.match(/[\d,]+/g)?.map(n => parseInt(n.replace(',', ''), 10)) ?? []
+            if (dt === 'OPEN') open_time = parseTime(dd) ?? undefined
+            else if (dt === 'START') start_time = parseTime(dd) ?? undefined
+            else if (dt === 'ADV') {
+              const nums = (dd.match(/[\d,]+/g) ?? [])
+                .map(n => parseInt(n.replace(/,/g, ''), 10))
+                .filter(n => n >= 100)
+              if (nums.length > 0) {
+                price_min = Math.min(...nums)
+                price_max = Math.max(...nums)
+              }
+            }
+          }
 
-          // 画像
-          const imgEl = await item.$('img')
-          const image_url = await imgEl?.getAttribute('src') ?? undefined
+          const imgEl = await item.$('div.left img')
+          const image_url = (await imgEl?.getAttribute('src')) ?? undefined
 
           events.push({
             title,
             date,
-            open_time: openMatch ? parseTime(openMatch[1]) ?? undefined : undefined,
-            start_time: startMatch ? parseTime(startMatch[1]) ?? undefined : undefined,
-            price_min: priceNums[0],
-            price_max: priceNums[1] ?? priceNums[0],
+            open_time,
+            start_time,
+            price_min,
+            price_max,
             source_url,
             source_site: 'liquidroom',
             is_touring: false,
             venue_name: 'LIQUIDROOM',
             image_url,
           })
-        } catch (e) {
+        } catch {
           // 個別イベントのパースエラーは続行
         }
       }
