@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "scrape": "ts-node --esm src/index.ts",
-    "scrape:iflyer": "ts-node --esm src/index.ts iflyer",
-    "scrape:liquidroom": "ts-node --esm src/index.ts liquidroom",
-    "scrape:wwwtokyo": "ts-node --esm src/index.ts wwwtokyo"
+    "scrape": "tsx src/index.ts",
+    "scrape:iflyer": "tsx src/index.ts iflyer",
+    "scrape:liquidroom": "tsx src/index.ts liquidroom",
+    "scrape:wwwtokyo": "tsx src/index.ts wwwtokyo"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.46.0",
@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "ts-node": "^10.9.0",
+    "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   }
 }
