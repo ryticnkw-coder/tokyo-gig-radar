@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\rytic\\\\projects\\\\tokyo-gig-radar\\\\scraper\\\\src\" -Recurse -File | Select-Object -ExpandProperty FullName | ForEach-Object { $_.Replace\\(\"C:\\\\Users\\\\rytic\\\\projects\\\\tokyo-gig-radar\\\\\", \"\"\\) })"
+    ]
+  }
+}

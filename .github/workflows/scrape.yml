@@ -1,0 +1,48 @@
+name: Scrape Events
+
+on:
+  schedule:
+    # 毎日 JST 06:00 (UTC 21:00 前日) と 14:00 (UTC 05:00) に実行
+    - cron: '0 21 * * *'
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'スクレイパー名 (iflyer / liquidroom / wwwtokyo / 空白=全部)'
+        required: false
+        default: ''
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scraper/package-lock.json
+
+      - name: Install dependencies
+        working-directory: scraper
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: scraper
+        run: npx playwright install chromium --with-deps
+
+      - name: Run scrapers
+        working-directory: scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          TARGET="${{ github.event.inputs.target }}"
+          if [ -n "$TARGET" ]; then
+            npm run scrape -- $TARGET
+          else
+            npm run scrape
+          fi
