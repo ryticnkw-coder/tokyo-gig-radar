@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import type { Event, EventFilters, EventWithVenue } from '@/types'
+import type { EventFilters, EventWithVenue } from '@/types'
 
 export async function getEvents(filters: EventFilters = {}): Promise<EventWithVenue[]> {
   const supabase = createClient()
